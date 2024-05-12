@@ -1,0 +1,713 @@
+---
+title: "Thesis_Script"
+output: html_document
+date: "2024-04-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Load libraries
+
+```{r}
+
+library(tidyverse)
+library(psych)
+library(ggcorrplot)
+library(apaTables)
+library(performance)
+library(remotes)
+library(Kmisc)
+library(naniar)
+library(datawizard)
+library(compare)
+library(pastecs)
+library(corrr)
+library(gt)
+library(flextable)
+library(lme4)
+library(lmerTest)
+library(car)
+library(psycho)
+library(report)
+library(rempsyc)
+library(broom)
+library(effectsize)
+library(writexl)
+
+```
+
+# Clean Data
+
+```{r}
+
+## Load raw data
+
+data <- read_csv('Final_Survey.csv')
+
+## Remove unused columns and rows
+
+data <- data[, -c(1:18)]
+data <- data[-c(1, 2), ]
+data <- data |> select(-contains(c('Click')))
+data <- data |> select(-contains(c('Submit')))
+
+## Remove participants who didn't complete the survey
+
+data <- data[-c(16, 95, 111), ]
+
+## Encode relative HD in one variable
+
+data <- data |> rename_at('Q95_1', ~'RelA_1')
+data <- data |> rename_at('Q95_2', ~'RelA_2')
+data <- data |> rename_at('Q95_3', ~'RelA_3')
+
+data <- data|> select(-'Q180')
+
+data$Rel1 <- paste_na(data$RelA_1, data$RelB_1, data$RelC_1, data$RelD_1, data$RelE_1, data$RelF_1, data$RelG_1, sep = "")
+
+data$Rel2 <- paste_na(data$RelA_2, data$RelB_2, data$RelC_2, data$RelD_2, data$RelE_2, data$RelF_2, data$RelG_2, sep = "")
+
+data$Rel3 <- paste_na(data$RelA_3, data$RelB_3, data$RelC_3, data$RelD_3, data$RelE_3, data$RelF_3, data$RelG_3, sep = "")
+
+data <- subset(data, select = -c(RelA_1, RelA_2, RelA_3, RelB_1, RelB_2, RelB_3, RelC_1, RelC_2, RelC_3, RelD_1, RelD_2, RelD_3, RelE_1, RelE_2, RelE_3, RelF_1, RelF_2, RelF_3, RelG_1, RelG_2, RelG_3)) 
+
+## Encode EW ID in one variable
+
+data$EW_ID <- paste_na(data$FL_204_DO, data$FL_154_DO, data$FL_222_DO, data$FL_241_DO, data$FL_258_DO, data$FL_168_DO, data$FL_182_DO, sep = "")
+
+data <- subset(data, select = -c(FL_204_DO, FL_154_DO, FL_222_DO, FL_241_DO, FL_258_DO, FL_168_DO, FL_182_DO)) 
+
+data$EW_ID <- gsub('[ABCDEFG]','', data$EW_ID)
+data$EW_ID <- gsub('A','', data$EW_ID)
+
+## Create time interval variable (weeks) based on condition
+
+data$time = data$FL_22_DO
+data <- data |> rename_at('FL_22_DO', ~ 'condition')
+
+data <- data |>
+  mutate(time = case_when(
+    time == 'ConditionA' ~ 1 / 7,
+    time == 'ConditionB' ~ 1,
+    time == 'ConditionC' ~ 4,
+    time == 'ConditionD' ~ 3 * 4.3452381,
+    time == 'ConditionE' ~ 6 * 4.3452381,
+    time == 'ConditionF' ~ 52.1428571,
+    time == 'ConditionG' ~ 1.5 * 52.1428571
+  ))
+
+## Rename Warmth and Competence items
+
+new <- c('Caring', 'Ambitious', 'Sympathetic', 'Competent', 'Friendly', 'Intelligent')
+ 
+old <- c('Warmth/Competence_1', 'Warmth/Competence_2', 'Warmth/Competence_3', 'Warmth/Competence_4', 'Warmth/Competence_5', 'Warmth/Competence_6')
+ 
+data <- data |>
+   rename_with( ~ new, all_of(old)) 
+
+## Fix Conditions
+
+data$condition <- gsub('Condition','', data$condition)
+
+## Add demographics
+
+data <- data |> rename_at('PROLIFIC_PID', ~ 'Participant.id')
+
+demographics <- read.csv('prolific_export_660420a353347f535e6d299e.csv')
+
+df_list <- list(data, demographics)
+
+data_demographics <- df_list |> reduce(full_join, by = 'Participant.id')
+
+## Remove Prolific participants who returned survey
+
+data_demographics <- data_demographics[-c(547:598), ]
+
+## Remove unused columns
+
+data_demographics <- data_demographics[, -c(62:68)]
+
+data_demographics <- data_demographics[, -c(55, 63, 69)]
+
+## Transform variable types
+
+data_demographics <- data_demographics |> mutate_at(c(1:54), as.numeric)
+data_demographics <- data_demographics |> mutate_at(c(56,57,58,60,61,62,63), as.numeric)
+
+data_demographics[sapply(data_demographics, is.character)] <- lapply(data_demographics[sapply(data_demographics, is.character)], as.factor)
+
+## Replace 'data expired' with NA
+
+data_demographics <- data_demographics |>
+  replace_with_na_all(condition = ~.x == 'DATA_EXPIRED')
+
+## Create Indices
+
+### HD Criteria
+
+data_demographics$hd_criteria <- rowMeans(data_demographics[ , c('HDCriteria_1', 'HDCriteria_2', 'HDCriteria_3')], na.rm = TRUE)
+
+### HD Relative
+
+data_demographics$hd_rel <- rowMeans(data_demographics[ , c('Rel1', 'Rel2', 'Rel3')], na.rm = TRUE)
+
+### JMCQ
+
+jmcq_cols <- grep("^JMCQ", names(data_demographics), value = TRUE)
+data_demographics$jmcq_score <- rowMeans(data_demographics[jmcq_cols])
+
+### Warmth and Competence
+
+data_demographics$warmth <- rowMeans(data_demographics[ , c('Caring', 'Sympathetic', 'Friendly')])
+data_demographics$competence <- rowMeans(data_demographics[ , c('Ambitious', 'Competent', 'Intelligent')])
+
+clean_data <- data_demographics
+
+```
+
+
+# Preliminary / Exploratory
+
+```{r}
+
+## Warmth and Competence Cronbach's Alpha
+
+warmth_data <- data.frame(clean_data$Caring, clean_data$Sympathetic, clean_data$Friendly)
+cronbachs_alpha(warmth_data)
+
+competence_data <- data.frame(clean_data$Ambitious, clean_data$Competent, clean_data$Intelligent)
+cronbachs_alpha(competence_data)
+
+## Attention check * Lost 9
+
+clean_data$condition_n <- dplyr:: recode(clean_data$condition,
+    A = '1',                           
+    B = '2',
+    C = '3',
+    D = '4',
+    E = '5',
+    F = '6',
+    G = '7'
+  )
+
+clean_data$condition_n <- as.numeric(clean_data$condition_n)
+
+clean_data$attention <- clean_data$condition_n == clean_data$JMCQ39
+
+clean_data <- subset(clean_data, attention != FALSE)
+
+## Missing
+
+na_counts <- colSums(is.na(clean_data))
+na_counts
+
+## Frequencies / Descriptive
+
+clean_data |>
+  count(Sex)
+
+percentage_sex <- clean_data |>
+  group_by(Sex) |>
+  summarise(Percentage = n() / nrow(clean_data) * 100)
+
+clean_data |>
+  count(Ethnicity.simplified)
+
+clean_data |>
+  count(Country.of.birth)
+
+birth_percentage <- clean_data |>
+  group_by(Country.of.birth) |>
+  summarise(Percentage = n() / nrow(clean_data) * 100)
+
+clean_data |>
+  count(Employment.status)
+
+clean_employment <- clean_data |>
+  filter(!is.na(Employment.status)) 
+
+employment_percentage <- clean_employment |>
+  group_by(Employment.status) |>
+  summarise(Percentage = n() / nrow(clean_data) * 100)
+
+descriptive <- describe(clean_data)
+
+mean_sd(clean_data$Age)
+
+```
+
+
+```{r}
+
+## Overall Correlations
+
+correlations <- clean_data |>
+  select(
+    where(
+      is.numeric
+      )) |>
+  cor(
+    use = 'pairwise.complete.obs'
+    )
+
+## Warmth and Competence Correlations
+
+warmth_competence <- clean_data[ , c("Caring", "Sympathetic", "Friendly", "Ambitious", "Competent", "Intelligent")]
+
+ggcorrplot(
+  cor(
+    warmth_competence
+    ))
+
+warmth_competence_corr <- warmth_competence |>
+  cor(
+    use = "pairwise.complete.obs"
+    )
+
+apa.cor.table(
+warmth_competence,
+  filename = "warmth_competence_corr_table",
+  show.conf.interval = TRUE,
+  show.sig.stars = TRUE,
+  landscape = TRUE
+)
+
+## HD Criteria Correlations
+
+hd <- clean_data |>
+  select(
+    starts_with(
+      "HDCriteria"
+      ))
+
+hd_corr <- hd |>  
+  cor(use = "pairwise.complete.obs")
+
+hd_corr <- round(hd_corr, 2)
+
+apa.cor.table(
+  hd,
+  filename = "hd_corr_table",
+  show.conf.interval = TRUE,
+  show.sig.stars = TRUE,
+  landscape = TRUE
+)
+
+## Histograms
+
+hist(clean_data$hd_criteria)
+multi.hist(warmth_competence[ , sapply(warmth_competence, is.numeric)])
+
+skew(hd)
+kurtosi(hd)
+
+ggplot(clean_data, 
+       aes(
+         x = as.factor(time), 
+         y = Rel
+         )) +
+  geom_boxplot()
+
+```
+# Main analyses Reliability
+
+```{r}
+
+## Polynomial Regression Reliability
+
+poly_reliability <- lm(Rel ~ poly(time, 3), data = clean_data)
+summary(poly_reliability)
+confint(poly_reliability, level = 0.95)
+AIC(poly_reliability)
+BIC(poly_reliability)
+report(poly_reliability)
+
+### Residuals Plot
+
+ggplot(poly_reliability, aes(x = .fitted, y = .resid)) + 
+  geom_point()
+
+### Polynomial Model Reliability Predictions Plot
+
+curve_data <- data.frame(time = seq(-20,100, length.out = 200))
+
+predictions_poly_rel <- predict(poly_reliability, newdata = curve_data)
+
+ggplot(data = clean_data, aes(x = time, y = Rel)) + 
+  geom_point(alpha = 0.2, shape = 21, fill = 'deepskyblue4', size = 5) +
+  geom_smooth(data = as.data.frame(curve_data), aes(x = time, y = predictions_poly_rel), color = 'firebrick1') +
+  theme_minimal() +
+  labs(
+    x = 'Time (weeks)',
+    y = 'Reliability'
+  )
+
+## Linear Regression Reliability *
+
+linear_reliability <- lm(Rel ~ time, data = clean_data)
+summary(linear_reliability)
+confint(linear_reliability, level = 0.95)
+AIC(linear_reliability)
+BIC(linear_reliability)
+report(linear_reliability)
+
+### Linear Model Reliability Predictions Plot
+
+linear_plot_reli <- ggplot(
+  data = clean_data, aes(
+    x = time, 
+    y = Rel
+    )) +
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4', 
+    size = 5
+    ) +
+  geom_smooth(
+    method = lm, 
+    se = FALSE, 
+    color = 'firebrick1', 
+    linewidth = .5) +
+  theme_minimal() +
+  labs(
+    x = 'Time (weeks)',
+    y = 'Reliability'
+  )
+
+linear_plot_reli
+
+ggsave(linear_plot_reli, file = "linear_plot_reli.png", width = 7, height = 3, units = "in", dpi = 300)
+
+## Logarithmic Regression Reliability *
+
+log_reliability <- lm(Rel ~ log(time), data = clean_data)
+summary(log_reliability)
+confint(log_reliability, level = 0.95)
+AIC(log_reliability)
+BIC(log_reliability)
+report(log_reliability)
+  
+### Residuals Plot
+  
+ggplot(
+  log_reliability, 
+  aes(
+    x = .fitted, 
+    y = .resid
+    )) + 
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4', 
+    size = 5
+  )
+  
+### Logarithmic Model Reliability Predictions Plot
+
+predictions_log_rel <- predict(log_reliability, newdata = curve_data)
+
+log_plot_reli <- ggplot(
+  data = clean_data, 
+  aes(x = time, 
+      y = Rel
+      )) + 
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4', 
+    size = 5
+    ) +
+  geom_smooth(
+    data = as.data.frame(curve_data), 
+    aes(
+      x = time, 
+      y = predictions_log_rel
+      ), 
+    color = 'firebrick1'
+    ) +
+  theme_minimal() +
+  labs(
+    x = 'Time (weeks)',
+    y = 'Reliability'
+  )
+
+ggsave(log_plot_reli, file = "log_plot_reli.png", width = 7, height = 3, units = "in", dpi = 300)
+
+```
+
+# Main analyses Supreme Court Criteria
+
+```{r}
+
+## Cronbach's alpha
+
+hd_data <- data.frame(clean_data$HDCriteria_1, clean_data$HDCriteria_2, clean_data$HDCriteria_3)
+cronbachs_alpha(hd_data)
+
+## Polynomial Regression HD Criteria
+
+poly_hd <- lm(hd_criteria ~ poly(time, 3), data = clean_data)
+summary(poly_hd)
+confint(poly_hd, level = 0.95)
+AIC(poly_hd)
+BIC(poly_hd)
+report(poly_hd)
+
+poly_hd_df <- report(poly_hd) |>
+  as.data.frame()
+
+### Residuals Plot
+
+ggplot(
+  poly_hd, aes(
+    x = .fitted, 
+    y = .resid
+    )) + 
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4', 
+    size = 5
+  )
+
+### Polynomial Model HD Criteria Predictions Plot
+
+curve_data <- data.frame(time = seq(-20,100, length.out = 200))
+
+predictions_poly_hd <- predict(poly_hd, newdata = curve_data)
+
+ggplot(
+  data = clean_data, 
+  aes(x = time, y = hd_criteria
+      )) + 
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4', 
+    size = 5
+    ) +
+  geom_smooth(
+    data = as.data.frame(curve_data), 
+    aes(
+      x = time, 
+      y = predictions_poly_hd
+      ), 
+    color = 'firebrick1'
+    ) +
+  theme_minimal() +
+  labs(
+    x = 'Time (weeks)',
+    y = 'HDCriteria'
+  )
+
+## Quadratic Regression HD Criteria
+
+poly_hd_2 <- lm(hd_criteria ~ poly(time, 2), data = clean_data)
+summary(poly_hd_2)
+confint(poly_hd_2, level = 0.95)
+AIC(poly_hd_2)
+BIC(poly_hd_2)
+report(poly_hd_2)
+
+## Logarithmic Regression HD Criteria
+
+log_hd <- lm(hd_criteria ~ log(time), data = clean_data)
+summary(log_hd)
+confint(log_hd, level = 0.95)
+AIC(log_hd)
+BIC(log_hd)
+report(log_hd)
+
+### Residuals Plot
+
+ggplot(log_hd, 
+       aes(
+         x = .fitted, 
+         y = .resid
+         )) + 
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4', 
+    size = 5
+  )
+
+### Logarithmic Model HD Criteria Predictions Plot
+
+predictions_log_hd <- predict(log_hd, newdata = curve_data)
+
+ggplot(
+  data = clean_data, 
+  aes(
+    x = time, 
+    y = hd_criteria
+    )) + 
+  geom_point(
+    alpha = 0.2, 
+    shape = 21, 
+    fill = 'deepskyblue4',
+    size = 3
+    ) +
+  geom_smooth(
+    data = as.data.frame(curve_data), 
+    aes(x = time, 
+        y = predictions_log_hd
+        ), 
+    color = 'firebrick1'
+    ) +
+  theme_minimal() +
+  labs(
+    x = 'Time (weeks)',
+    y = 'HDCriteria'
+  )
+
+```
+
+# Exploratory Analysis of Reliability
+
+```{r}
+
+# Logarithmic Regression Reliability + EW Random Intercepts
+
+log_rel_ew <- lmer(Rel ~ log(time) + (1|EW_ID), data = clean_data)
+summary(log_rel_ew)
+icc(log_rel_ew, by_group = TRUE)
+confint(log_rel_ew)
+AIC(log_rel_ew)
+BIC(log_rel_ew)
+report(log_rel_ew)
+
+log_rel_ew_df <- report(log_rel_ew) |>
+  as.data.frame()
+
+write_xlsx(log_rel_ew_df, 'log_rel_ew_df.xlsx')
+
+# Logarithmic Regression Reliability + Warmth and Competence + EW Random Intercepts
+
+log_rel_ew_wc <- lmer(Rel ~ log(time) + warmth + competence + (1|EW_ID), data = clean_data)
+summary(log_rel_ew_wc)
+icc(log_rel_ew_wc, by_group = TRUE)
+confint(log_rel_ew_wc)
+AIC(log_rel_ew_wc)
+BIC(log_rel_ew_wc)
+report(log_rel_ew_wc)
+
+log_rel_ew_wc_df <- report(log_rel_ew_wc) |>
+  as.data.frame()
+
+write_xlsx(log_rel_ew_wc_df, 'log_rel_ew_wc_df.xlsx')
+
+## Logarithmic Model Reliability + Warmth and Competence + EW Random Intercepts Predictions Plots
+
+data_pred <- expand_grid("EW_ID" = clean_data$EW_ID, "time" = clean_data$time)
+data_pred$warmth <- mean(clean_data$warmth)
+data_pred$competence <- mean(clean_data$competence)
+
+data_pred$log_rel_ew_wc_pred <- predict(log_rel_ew_wc, newdata = data_pred)
+
+plot_log_rel_ew_wc_pred <- ggplot(data_pred,
+       aes(
+         y = log_rel_ew_wc_pred,
+         x = time,
+         group = 1
+       )) +
+  facet_wrap(~ EW_ID) +
+  geom_point(
+    alpha = 0.2,
+    shape = 21,
+    fill = 'deepskyblue4',
+    size = 1
+  ) +
+  geom_line(
+    col = 'firebrick1'
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Time',
+    y = 'Reliability'
+  )
+
+plot_log_rel_ew_wc_pred
+
+ggsave(plot_log_rel_ew_wc_pred, file = "plot_log_rel_ew_wc_pred.png", width = 7, height = 4, units = "in", dpi = 300)
+
+```
+
+
+# Exploratory Analysis of the Supreme Court Criteria
+```{r}
+
+## Polynomial Regression of HD Criteria + EW Random Intercepts
+
+poly_hd_ew <- lmer(hd_criteria ~ poly(time, 2) + (1|EW_ID), data = clean_data)
+summary(poly_hd_ew)
+confint(poly_hd_ew)
+AIC(poly_hd_ew)
+BIC(poly_hd_ew)
+icc(poly_hd_ew, by_group = TRUE)
+report(poly_hd_ew, CI = 95)
+
+poly_hd_ew_df <- report(poly_hd_ew) |>
+  as.data.frame()
+
+write_xlsx(poly_hd_ew_df, 'poly_hd_ew_df.xlsx')
+
+## Polynomial Regression of HD Criteria + Warmth and Competence + EW random Intercepts
+
+poly_hd_ew_wc <- lmer(hd_criteria ~ poly(time, 2) + warmth + competence + (1|EW_ID), data = clean_data)
+summary(poly_hd_ew_wc)
+confint(poly_hd_ew_wc)
+AIC(poly_hd_ew_wc)
+BIC(poly_hd_ew_wc)
+icc(poly_hd_ew_wc, by_group = TRUE)
+report(poly_hd_ew_wc, CI = 95)
+
+poly_hd_ew_wc_df <- report(poly_hd_ew_wc) |>
+  as.data.frame()
+
+write_xlsx(poly_hd_ew_wc_df, 'poly_hd_ew_wc_df.xlsx')
+
+## Prediction Data for Mixed-Effects Plots
+
+data_pred <- expand_grid("EW_ID" = clean_data$EW_ID, "time" = clean_data$time)
+data_pred$warmth <- mean(clean_data$warmth)
+data_pred$competence <- mean(clean_data$competence)
+
+## Polynomial Model HD Criteria + Warmth and Competence + EW random Intercepts Predictions Plots
+
+data_pred$poly_hd_ew_wc_pred <- predict(poly_hd_ew_wc, newdata = data_pred)
+
+plot_ply_hd_ew_wc <- ggplot(data_pred,
+       aes(
+         y = poly_hd_ew_wc_pred,
+         x = time,
+         group = 1
+       )) +
+  facet_wrap(~ EW_ID) +
+  geom_point(
+    alpha = 0.2,
+    shape = 21,
+    fill = 'deepskyblue4',
+    size = 1
+  ) +
+  geom_line(
+    col = 'firebrick1'
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Time',
+    y = 'Supreme Court Criteria'
+  )
+plot_ply_hd_ew_wc
+
+ggsave(plot_ply_hd_ew_wc, file = "plot_ply_hd_ew_wc.png", width = 7, height = 4, units = "in", dpi = 300)
+
+```
+
+
+
+
+
+
