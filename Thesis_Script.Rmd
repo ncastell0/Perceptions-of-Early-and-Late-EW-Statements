@@ -179,7 +179,7 @@ cronbachs_alpha(warmth_data)
 competence_data <- data.frame(clean_data$Ambitious, clean_data$Competent, clean_data$Intelligent)
 cronbachs_alpha(competence_data)
 
-## Attention check * Lost 9
+## Attention check
 
 clean_data$condition_n <- dplyr:: recode(clean_data$condition,
     A = '1',                           
@@ -330,7 +330,7 @@ ggplot(poly_reliability, aes(x = .fitted, y = .resid)) +
 
 ### Polynomial Model Reliability Predictions Plot
 
-curve_data <- data.frame(time = seq(-20,100, length.out = 200))
+curve_data <- data.frame(time = seq(0,80, length.out = 100))
 
 predictions_poly_rel <- predict(poly_reliability, newdata = curve_data)
 
@@ -474,7 +474,7 @@ ggplot(
 
 ### Polynomial Model HD Criteria Predictions Plot
 
-curve_data <- data.frame(time = seq(-20,100, length.out = 200))
+curve_data <- data.frame(time = seq(0,80, length.out = 100))
 
 predictions_poly_hd <- predict(poly_hd, newdata = curve_data)
 
@@ -705,7 +705,6 @@ plot_ply_hd_ew_wc
 ggsave(plot_ply_hd_ew_wc, file = "plot_ply_hd_ew_wc.png", width = 7, height = 4, units = "in", dpi = 300)
 
 ```
-
 
 
 
