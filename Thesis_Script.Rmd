@@ -286,6 +286,11 @@ hd_corr <- hd |>
 
 hd_corr <- round(hd_corr, 2)
 
+ggcorrplot(
+  cor(
+    hd
+    ))
+
 apa.cor.table(
   hd,
   filename = "hd_corr_table",
@@ -297,10 +302,13 @@ apa.cor.table(
 ## Histograms
 
 hist(clean_data$hd_criteria)
-multi.hist(warmth_competence[ , sapply(warmth_competence, is.numeric)])
+hist(clean_data$Rel)
 
+multi.hist(warmth_competence[ , sapply(warmth_competence, is.numeric)])
+multi.hist(hd[ , sapply(hd, is.numeric)])
 skew(hd)
 kurtosi(hd)
+
 
 ggplot(clean_data, 
        aes(
